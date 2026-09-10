@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber Evade - لعبة التحدي السرعة</title>
+    <!-- Tailwind CSS للتنسيق -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { background-color: #0f172a; font-family: system-ui, sans-serif; }
+        canvas { border: 2px solid #38bdf8; box-shadow: 0 0 20px rgba(56, 189, 248, 0.3); touch-action: none; }
+    </style>
+</head>
+<body class="text-white min-h-screen flex flex-col items-center justify-between p-4">
+
+    <!-- Navbar & Monetization -->
+    <header class="w-full max-w-2xl flex justify-between items-center py-4 border-b border-slate-700">
+        <h1 class="text-2xl font-bold text-sky-400 flex items-center gap-2">
+            <i class="fa-solid fa-gamepad"></i> Cyber Evade
+        </h1>
+        <!-- رابط الدعم المالي (Buy Me A Coffee) -->
+        <a href="https://www.buymeacoffee.com/YOUR_USERNAME" target="_blank" 
+           class="bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2 px-4 rounded-full text-sm transition-all flex items-center gap-2 shadow-lg">
+            <i class="fa-solid fa-mug-hot"></i> أدعمني بكوب قهوة
+        </a>
+    </header>
+
+    <!-- Main Game Section -->
+    <main class="flex flex-col items-center my-6 w-full max-w-2xl">
+        <div class="flex justify-between w-full max-w-[400px] mb-2 text-lg font-semibold text-slate-300">
+            <div>النتيجة: <span id="score" class="text-sky-400">0</span></div>
+            <div>أعلى نتيجة: <span id="highScore" class="text-emerald-400">0</span></div>
+        </div>
+
+        <div class="relative">
+            <canvas id="gameCanvas" width="400" height="500" class="rounded-lg bg-slate-900" aria-label="لوحة اللعبة"></canvas>
+            
+            <!-- Overlay Screen -->
+            <div id="startScreen" class="absolute inset-0 bg-slate-950/90 rounded-lg flex flex-col items-center justify-center p-6 text-center">
+                <h2 class="text-3xl font-extrabold text-sky-400 mb-2">تجنب العوائق!</h2>
+                <p class="text-slate-400 text-sm mb-6">استخدم أسهم اللوحة (أو اسحب للشاشات اللمسية) للتحرك واجمع الجواهر الخضراء.</p>
+                <button id="startBtn" aria-label="ابدأ اللعب" class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold px-8 py-3 rounded-lg text-lg transition-transform active:scale-95 shadow-lg shadow-sky-500/20">
+                    ابدأ اللعب الأن
+                </button>
+            </div>
+        </div>
+
+        <!-- Ad Banner Placeholder (مكان إعلانات أدسينس) -->
+        <div class="w-full max-w-[400px] mt-4 p-3 bg-slate-800/50 border border-slate-700 rounded-lg text-center text-xs text-slate-500">
+            <!-- ضع كود Google AdSense هنا لاحقاً -->
+            <p>إعلان مستهدف (Ad Space)</p>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-slate-500 text-xs text-center py-4">
+        تم التطوير بواسطة <a href="https://github.com/YOUR_GITHUB_USERNAME" class="text-sky-400 underline" id="authorLink">حسابي في GitHub</a>
+    </footer>
+
+    <!-- Game Logic -->
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('startScreen');
+        const startBtn = document.getElementById('startBtn');
+        const scoreEl = document.getElementById('score');
+        const highScoreEl = document.getElementById('highScore');
+
+        let score = 0;
+        let highScore = parseInt(localStorage.getItem('cyber_high_score'), 10) || 0;
+        highScoreEl.innerText = highScore;
+
+        let gameActive = false;
+        let player = { x: 180, y: 440, w: 40, h: 40, speed: 6 };
+        let obstacles = [];
+        let rewards = [];
+        let keys = {};
+        let frameCount = 0;
+
+        // Lazy AudioContext creation (improves compatibility with browsers requiring user gesture)
+        let audioCtx = null;
+        function getAudioCtx() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            return audioCtx;
+        }
+        function playSound(freq, type, duration) {
+            const aCtx = getAudioCtx();
+            if (aCtx.state === 'suspended') aCtx.resume();
+            const osc = aCtx.createOscillator();
+            const gain = aCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, aCtx.currentTime);
+            gain.gain.setValueAtTime(0.1, aCtx.currentTime);
+            // avoid ramping to 0 which can throw in some contexts; ramp to a small value
+            gain.gain.exponentialRampToValueAtTime(0.01, aCtx.currentTime + Math.max(0.01, duration));
+            osc.connect(gain);
+            gain.connect(aCtx.destination);
+            osc.start();
+            osc.stop(aCtx.currentTime + duration);
+        }
+
+        // Event Listeners
+        window.addEventListener('keydown', e => keys[e.key] = true);
+        window.addEventListener('keyup', e => keys[e.key] = false);
+
+        // Reset keys when window loses focus (prevents stuck keys)
+        window.addEventListener('blur', () => keys = {});
+
+        // Touch Control for Mobile (passive:false so preventDefault works)
+        let touchStartX = 0;
+        canvas.addEventListener('touchstart', e => {
+            if (e.touches && e.touches[0]) {
+                touchStartX = e.touches[0].clientX;
+            }
+        }, { passive: true });
+
+        canvas.addEventListener('touchmove', e => {
+            if (!gameActive) return;
+            // prevent the page from scrolling while playing
+            e.preventDefault?.();
+            const touchX = e.touches[0].clientX;
+            let diff = touchX - touchStartX;
+            // use delta and update touchStartX so movement is smooth and not cumulative
+            player.x += diff * 0.3;
+            player.x = Math.max(0, Math.min(canvas.width - player.w, player.x));
+            touchStartX = touchX;
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', e => {
+            touchStartX = 0;
+        });
+
+        // Start button
+        startBtn.addEventListener('click', () => {
+            // ensure audio context can start from this user gesture
+            getAudioCtx(); 
+            startScreen.classList.add('hidden');
+            resetGame();
+            gameActive = true;
+            // ensure any previous animation loop won't cause duplicates; gameActive prevents double-start
+            requestAnimationFrame(gameLoop);
+        });
+
+        function resetGame() {
+            score = 0;
+            scoreEl.innerText = score;
+            player.x = 180;
+            obstacles = [];
+            rewards = [];
+            frameCount = 0;
+            // reset start screen UI text back to default
+            startScreen.querySelector('h2').innerText = "تجنب العوائق!";
+            startScreen.querySelector('p').innerText = "استخدم أسهم اللوحة (أو اسحب للشاشات اللمسية) للتحرك واجمع الجواهر الخضراء.";
+            startBtn.innerText = "ابدأ اللعب الأن";
+        }
+
+        function gameLoop() {
+            if (!gameActive) return;
+
+            // Clear Canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Controls
+            if ((keys['ArrowLeft'] || keys['a']) && player.x > 0) player.x -= player.speed;
+            if ((keys['ArrowRight'] || keys['d']) && player.x < canvas.width - player.w) player.x += player.speed;
+
+            // Draw Player (use save/restore around shadow settings)
+            ctx.save();
+            ctx.fillStyle = '#38bdf8';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#38bdf8';
+            ctx.fillRect(player.x, player.y, player.w, player.h);
+            ctx.restore();
+
+            // Spawning Items
+            frameCount++;
+            if (frameCount % 45 === 0) {
+                const size = 30;
+                obstacles.push({ x: Math.random() * (canvas.width - size), y: -size, size: size, speed: 3 + Math.random() * 3 });
+            }
+            if (frameCount % 120 === 0) {
+                const size = 20;
+                rewards.push({ x: Math.random() * (canvas.width - size), y: -size, size: size, speed: 2 });
+            }
+
+            // Move & Draw Obstacles (iterate backwards to allow safe splice)
+            ctx.save();
+            ctx.fillStyle = '#f43f5e';
+            ctx.shadowColor = '#f43f5e';
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                const obs = obstacles[i];
+                obs.y += obs.speed;
+                ctx.fillRect(obs.x, obs.y, obs.size, obs.size);
+
+                // Collision Check
+                if (player.x < obs.x + obs.size && player.x + player.w > obs.x &&
+                    player.y < obs.y + obs.size && player.y + player.h > obs.y) {
+                    gameOver();
+                    // break early since gameOver sets gameActive = false
+                    break;
+                }
+
+                if (obs.y > canvas.height + obs.size) obstacles.splice(i, 1);
+            }
+            ctx.restore();
+
+            // Move & Draw Rewards (iterate backwards)
+            ctx.save();
+            ctx.fillStyle = '#10b981';
+            ctx.shadowColor = '#10b981';
+            for (let i = rewards.length - 1; i >= 0; i--) {
+                const rw = rewards[i];
+                rw.y += rw.speed;
+                ctx.beginPath();
+                ctx.arc(rw.x + rw.size / 2, rw.y + rw.size / 2, rw.size / 2, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Collection Check
+                if (player.x < rw.x + rw.size && player.x + player.w > rw.x &&
+                    player.y < rw.y + rw.size && player.y + player.h > rw.y) {
+                    score += 50;
+                    scoreEl.innerText = score;
+                    try { playSound(600, 'sine', 0.1); } catch (e) { /* ignore audio errors */ }
+                    rewards.splice(i, 1);
+                }
+
+                if (rw.y > canvas.height + rw.size) rewards.splice(i, 1);
+            }
+            ctx.restore();
+
+            // Auto Score Incrementation
+            if (frameCount % 10 === 0) {
+                score += 1;
+                scoreEl.innerText = score;
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function gameOver() {
+            if (!gameActive) return;
+            gameActive = false;
+            try { playSound(150, 'sawtooth', 0.4); } catch (e) { /* ignore audio errors */ }
+
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('cyber_high_score', String(highScore));
+                highScoreEl.innerText = highScore;
+            }
+
+            startScreen.classList.remove('hidden');
+            startScreen.querySelector('h2').innerText = "انتهت اللعبة!";
+            startScreen.querySelector('p').innerText = `النتيجة التي حققتها: ${score}`;
+            startBtn.innerText = "إعادة المحاولة";
+            // focus the start button for keyboard/a11y users
+            startBtn.focus();
+        }
+    </script>
+</body>
+</html>
